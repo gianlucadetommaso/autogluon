@@ -1715,7 +1715,7 @@ class TabularPredictor:
                     )
                 )
         return results
-    
+
     def get_pred_from_proba(self, y_pred_proba: pd.DataFrame | np.ndarray, decision_threshold: float | None = None) -> pd.Series | np.array:
         """
         Given prediction probabilities, convert to predictions.
@@ -4248,7 +4248,7 @@ class TabularPredictor:
 
             return cross_val_outputs, cross_val_targets, cross_test_outputs
 
-        if self.problem_type == MULTICLASS:
+        if self.problem_type in [BINARY, MULTICLASS]:
             cross_val_probs, cross_val_targets, cross_test_probs = [], [], []
 
             model_probs_val = self.predict_proba_multi(models=[model])[model]

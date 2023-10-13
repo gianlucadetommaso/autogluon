@@ -8,8 +8,7 @@ import os
 import pprint
 import shutil
 import time
-import warnings
-from typing import List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import networkx as nx
 import numpy as np
@@ -1630,6 +1629,93 @@ class TabularPredictor:
         data = self._get_dataset(data)
         return self._learner.predict_proba(X=data, model=model, as_pandas=as_pandas, as_multiclass=as_multiclass, transform_features=transform_features)
 
+    def predict_conformal(
+        self,
+        val_data: str | TabularDataset | pd.DataFrame,
+        test_data: str | TabularDataset | pd.DataFrame,
+        coverage: float,
+        model: str | None = None,
+    ) -> Dict[str, Union[List[List[int]], np.ndarray]]:
+        """
+        Predict conformal sets at a specified coverage for each input in the test data.
+        Currently, this method is supported only for binary and multi-class classification. In the case of
+
+        Parameters
+        ----------
+        val_data: str | TabularDataset | pd.DataFrame
+            Validation data.
+        test_data: str | TabularDataset | pd.DataFrame
+            Test data.
+        coverage: float
+            Target coverage.
+        model : str (optional)
+            The name of the model to get prediction probabilities from. Defaults to None, which uses the highest scoring model on the validation set.
+            Valid models are listed in this `predictor` by calling `predictor.get_model_names()`.
+
+        Returns
+        -------
+        Dict[str, Union[List[List[int]], np.ndarray]]
+            A conformal set for each input in the test data.
+        """
+        try:
+            import fortuna
+        except ImportError:
+            raise ImportError("`aws-fortuna` must be installed to use this method.")
+
+        if not isinstance(coverage, float) or coverage < 0 or coverage > 1:
+            raise ValueError("`coverage` must be a float in [0, 1].")
+
+        if self.problem_type not in [BINARY, MULTICLASS, REGRESSION]:
+            raise ValueError(f"This method is not supported for `problem_type={self.problem_type}`.")
+
+        model_names = [model] if model is not None else self.get_model_names()
+        results = dict()
+
+        for model_name in model_names:
+            model = self._trainer.load_model(model_name)
+
+            if self.problem_type in [BINARY, MULTICLASS]:
+                X_val_internal = self.transform_features(data=val_data, model=model_name)
+                y_val_internal = self.transform_labels(labels=val_data[self.label]).astype(int)
+                y_probs_val = model.predict_proba(X_val_internal)
+                if y_probs_val.ndim == 1:
+                    y_probs_val = np.stack([1 - y_probs_val, y_probs_val], axis=1)
+
+                X_test_internal = self.transform_features(data=test_data)
+                y_probs_test = model.predict_proba(X_test_internal)
+                if y_probs_test.ndim == 1:
+                    y_probs_test = np.stack([1 - y_probs_test, y_probs_test], axis=1)
+
+                from fortuna.conformal import AdaptivePredictionConformalClassifier
+                results[model_name] = AdaptivePredictionConformalClassifier().conformal_set(
+                    val_probs=y_probs_val,
+                    val_targets=y_val_internal.values.astype(int),
+                    test_probs=y_probs_test,
+                    error=1 - coverage
+                )
+
+            elif self.problem_type == REGRESSION:
+                num_folds = len(model.models)
+                if num_folds <= 1:
+                    logging.info(f"Skipping `{model_name}` because not enough folds.")
+                    continue
+
+                cross_val_outputs, cross_val_targets, cross_test_outputs = self.get_cross_val_quantities(
+                    test_data=test_data,
+                    model=model_name,
+                )
+
+                from fortuna.conformal import CVPlusConformalRegressor
+                results[model_name] = np.array(
+                    CVPlusConformalRegressor().conformal_interval(
+                        cross_val_outputs=cross_val_outputs,
+                        cross_val_targets=cross_val_targets,
+                        cross_test_outputs=cross_test_outputs,
+                        error=1 - coverage,
+                    )
+                )
+        return results
+    
     def get_pred_from_proba(self, y_pred_proba: pd.DataFrame | np.ndarray, decision_threshold: float | None = None) -> pd.Series | np.array:
         """
         Given prediction probabilities, convert to predictions.

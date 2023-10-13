@@ -1629,7 +1629,7 @@ class TabularPredictor:
         data = self._get_dataset(data)
         return self._learner.predict_proba(X=data, model=model, as_pandas=as_pandas, as_multiclass=as_multiclass, transform_features=transform_features)
 
-    def predict_conformal(
+    def predict_conformal_set(
         self,
         val_data: str | TabularDataset | pd.DataFrame,
         test_data: str | TabularDataset | pd.DataFrame,
